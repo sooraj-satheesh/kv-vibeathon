@@ -81,8 +81,11 @@ class ScreenshotAnnotator(QWidget):
         self.chat_display = QTextBrowser(self)
         self.chat_display.setReadOnly(True)
         self.chat_display.setStyleSheet("""
-            background-color: rgba(255, 255, 255, 180);
-            border-radius: 10px;     
+            background-color: #212121;
+            border-radius: 10px;         
+            border: 1px solid #555;
+            color: white;
+            font-size: 14px;
             padding: 5px;
         """)
         # Initial position, will be adjusted after selection
@@ -92,7 +95,8 @@ class ScreenshotAnnotator(QWidget):
         self.message_input.setPlaceholderText("Type your message...")
         self.message_input.returnPressed.connect(self.send_message)
         self.message_input.setStyleSheet("""
-            background-color: rgba(255, 255, 255, 200);
+            background-color: #303030;
+            color: white;
             border-radius: 5px;
             padding: 5px;
         """)
@@ -577,7 +581,7 @@ class ScreenshotAnnotator(QWidget):
             return
 
         self.chat_display.append(f"<b>You:</b> {user_message}")
-        self.chat_display.append("")
+        self.chat_display.append("\n")
         self.message_input.clear()
 
         # Prepare message content, including image if available
