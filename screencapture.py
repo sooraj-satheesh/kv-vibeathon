@@ -146,23 +146,24 @@ class ScreenshotAnnotator(QWidget):
         self.create_annotation_buttons()
         self.update()
 
-        # Show and position chat elements
-        chat_x = self.selection_rect.left() + 10
-        chat_y = self.selection_rect.bottom() - 160 # Adjust based on desired height
-        chat_width = self.selection_rect.width() - 20
-        chat_height = 120
+        # Show and position chat elements to the right of the selection
+        chat_x = self.selection_rect.right() + 10
+        chat_y = self.selection_rect.top()
+        chat_width = 300 # Fixed width for the chat panel
+        chat_height = self.selection_rect.height() - 40 # Leave space for input at bottom of chat
 
-        input_y = self.selection_rect.bottom() - 30
-        input_width = self.selection_rect.width() - 100
+        input_x = chat_x
+        input_y = chat_y + chat_height + 5 # Below chat display, with a small gap
+        input_width = chat_width - 80
         input_height = 25
 
-        send_x = self.selection_rect.right() - 80
-        send_y = self.selection_rect.bottom() - 30
+        send_x = chat_x + chat_width - 70
+        send_y = input_y
         send_width = 70
         send_height = 25
 
         self.chat_display.setGeometry(chat_x, chat_y, chat_width, chat_height)
-        self.message_input.setGeometry(chat_x, input_y, input_width, input_height)
+        self.message_input.setGeometry(input_x, input_y, input_width, input_height)
         self.send_button.setGeometry(send_x, send_y, send_width, send_height)
 
         self.chat_display.show()
