@@ -65,7 +65,7 @@ class ScreenshotAnnotator(QWidget):
         self.chat_display.setReadOnly(True)
         self.chat_display.setStyleSheet("""
             background-color: rgba(255, 255, 255, 180);
-            border-radius: 10px;
+            border-radius: 10px;     
             padding: 5px;
         """)
         # Initial position, will be adjusted after selection
@@ -92,7 +92,6 @@ class ScreenshotAnnotator(QWidget):
         self.send_button.hide()
 
         self.chat_history = [] # Initialize chat history
-
         self.showFullScreen()
 
     # --- Selection Phase ---
@@ -121,9 +120,9 @@ class ScreenshotAnnotator(QWidget):
             if event.button() == Qt.MouseButton.LeftButton and self.drawing:
                 self.drawing = False
                 self.computeBoundingRect()
-                self.show_rect = True
+                # self.show_rect = True
                 self.update()
-                QTimer.singleShot(500, self.confirm_selection)
+                self.confirm_selection()
         else:
             self.annotation_mouseReleaseEvent(event)
 
@@ -152,10 +151,16 @@ class ScreenshotAnnotator(QWidget):
         self.update()
 
         # Show and position chat elements to the right of the selection
+        screen_width = self.bg_pixmap.width()
         chat_x = self.selection_rect.right() + 10
         chat_y = self.selection_rect.top()
-        chat_width = 300 # Fixed width for the chat panel
-        chat_height = self.selection_rect.height() - 40 # Leave space for input at bottom of chat
+        chat_width = 300  # Fixed width for the chat panel
+        chat_height = self.selection_rect.height() - 30 # Leave space for input at bottom of chat
+        
+        if chat_x + chat_width > screen_width:
+            chat_x = self.selection_rect.right() - chat_width - 40
+            chat_height -= 10
+            
 
         input_x = chat_x
         input_y = chat_y + chat_height + 5 # Below chat display, with a small gap
@@ -175,7 +180,6 @@ class ScreenshotAnnotator(QWidget):
         self.message_input.show()
         self.send_button.show()
 
-
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -189,26 +193,26 @@ class ScreenshotAnnotator(QWidget):
 
         # Confirm
         btn_confirm = QPushButton("🗸", self)
-        btn_confirm.setGeometry(self.selection_rect.left() + 10, self.selection_rect.top() + 10, 80, 30)
+        btn_confirm.setGeometry(self.selection_rect.left() + 10, self.selection_rect.top() - 40, 30, 30)
         btn_confirm.clicked.connect(self.save_final_image)
         self.annotation_buttons.append(btn_confirm)
 
         # Cancel
         btn_cancel = QPushButton("🞩", self)
-        btn_cancel.setGeometry(self.selection_rect.left() + 100, self.selection_rect.top() + 10, 80, 30)
+        btn_cancel.setGeometry(self.selection_rect.left() + 50, self.selection_rect.top() - 40, 30, 30)
         btn_cancel.clicked.connect(self.restart_selection)
         self.annotation_buttons.append(btn_cancel)
 
         # Undo
         btn_undo = QPushButton("↶", self)
-        btn_undo.setGeometry(self.selection_rect.left() + 190, self.selection_rect.top() + 10, 80, 30)
+        btn_undo.setGeometry(self.selection_rect.left() + 90, self.selection_rect.top() - 40, 30, 30)
         btn_undo.clicked.connect(self.undo)
         self.annotation_buttons.append(btn_undo)
 
         # Mode buttons
         for i, mode_name in enumerate(MODES):
             btn = QPushButton(MODE_ICONS[mode_name], self)
-            btn.setGeometry(self.selection_rect.left() + 280 + i * 90, self.selection_rect.top() + 10, 80, 30)
+            btn.setGeometry(self.selection_rect.left() + 130 + i * 40, self.selection_rect.top() - 40, 30, 30)
             btn.setCheckable(True)
             btn.setChecked(i == self.mode_index)
             btn.clicked.connect(lambda checked, idx=i: self.set_mode(idx))
