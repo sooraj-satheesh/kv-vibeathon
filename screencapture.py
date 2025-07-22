@@ -635,7 +635,7 @@ class ScreenshotAnnotator(QWidget):
         if html_chunk.startswith("<p>") and html_chunk.endswith("</p>"):
             html_chunk = html_chunk[3:-4]
             
-        self.chat_display.insertHtml(html_chunk)
+        self.chat_display.insertHtml(html_chunk + " ")
         self.chat_display.ensureCursorVisible()
         QApplication.processEvents()
 
