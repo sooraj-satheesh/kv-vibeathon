@@ -191,30 +191,49 @@ class ScreenshotAnnotator(QWidget):
             btn.setParent(None)
         self.annotation_buttons = []
 
-        # Confirm
-        btn_confirm = QPushButton("🗸", self)
-        btn_confirm.setGeometry(self.selection_rect.left() + 10, self.selection_rect.top() - 40, 30, 30)
-        btn_confirm.clicked.connect(self.save_final_image)
-        self.annotation_buttons.append(btn_confirm)
+        # Common style for annotation buttons
+        btn_style = """
+            QPushButton {
+            background-color: #f0f4fa;
+            border: 1px solid #b0c4de;
+            border-radius: 7px;
+            font-size: 18px;
+            }
+            QPushButton:hover {
+            background-color: #d0eaff;
+            border: 1.5px solid #3399ff;
+            }
+            QPushButton:checked {
+            background-color: #3399ff;
+            color: white;
+            border: 2px solid #005fa3;
+            }
+        """
 
         # Cancel
         btn_cancel = QPushButton("🞩", self)
-        btn_cancel.setGeometry(self.selection_rect.left() + 50, self.selection_rect.top() - 40, 30, 30)
+        btn_cancel.setGeometry(self.selection_rect.left() + 10, self.selection_rect.top() - 40, 30, 30)
         btn_cancel.clicked.connect(self.restart_selection)
+        btn_cancel.setStyleSheet(btn_style)
+        btn_cancel.setToolTip("Cancel and reselect area")
         self.annotation_buttons.append(btn_cancel)
 
         # Undo
         btn_undo = QPushButton("↶", self)
-        btn_undo.setGeometry(self.selection_rect.left() + 90, self.selection_rect.top() - 40, 30, 30)
+        btn_undo.setGeometry(self.selection_rect.left() + 50, self.selection_rect.top() - 40, 30, 30)
         btn_undo.clicked.connect(self.undo)
+        btn_undo.setStyleSheet(btn_style)
+        btn_undo.setToolTip("Undo last annotation")
         self.annotation_buttons.append(btn_undo)
 
         # Mode buttons
         for i, mode_name in enumerate(MODES):
             btn = QPushButton(MODE_ICONS[mode_name], self)
-            btn.setGeometry(self.selection_rect.left() + 130 + i * 40, self.selection_rect.top() - 40, 30, 30)
+            btn.setGeometry(self.selection_rect.left() + 90 + i * 40, self.selection_rect.top() - 40, 30, 30)
             btn.setCheckable(True)
             btn.setChecked(i == self.mode_index)
+            btn.setStyleSheet(btn_style)
+            btn.setToolTip(f"Switch to {mode_name} mode")
             btn.clicked.connect(lambda _, idx=i: self.set_mode(idx))
             self.annotation_buttons.append(btn)
 
@@ -225,7 +244,7 @@ class ScreenshotAnnotator(QWidget):
         self.mode_index = idx
         self.mode = MODES[self.mode_index]
         # Update button checked state
-        for i, btn in enumerate(self.annotation_buttons[3:]):
+        for i, btn in enumerate(self.annotation_buttons[len(self.annotation_buttons)-len(MODES):]):
             btn.setChecked(i == idx)
 
     def annotation_mousePressEvent(self, event):
