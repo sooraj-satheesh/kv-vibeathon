@@ -49,7 +49,7 @@ class ScreenshotAnnotator(QWidget):
         self.annotation_buttons = []
         self.mode_index = 0
         self.mode = MODES[self.mode_index]
-        self.pen = QPen(QColor(102, 204, 255, 128), 2)
+        self.pen = QPen(QColor(102, 204, 255), 4)
         self.border_color = QColor(102, 204, 255, 128)
         self.ann_drawing = False
         self.ann_start_point = QPoint()
@@ -215,7 +215,7 @@ class ScreenshotAnnotator(QWidget):
             btn.setGeometry(self.selection_rect.left() + 130 + i * 40, self.selection_rect.top() - 40, 30, 30)
             btn.setCheckable(True)
             btn.setChecked(i == self.mode_index)
-            btn.clicked.connect(lambda checked, idx=i: self.set_mode(idx))
+            btn.clicked.connect(lambda _, idx=i: self.set_mode(idx))
             self.annotation_buttons.append(btn)
 
         for btn in self.annotation_buttons:
@@ -225,7 +225,7 @@ class ScreenshotAnnotator(QWidget):
         self.mode_index = idx
         self.mode = MODES[self.mode_index]
         # Update button checked state
-        for i, btn in enumerate(self.annotation_buttons[4:]):
+        for i, btn in enumerate(self.annotation_buttons[3:]):
             btn.setChecked(i == idx)
 
     def annotation_mousePressEvent(self, event):
@@ -406,7 +406,7 @@ class ScreenshotAnnotator(QWidget):
 
         # Draw stroke path (selection phase)
         if self.drawing and len(self.strokes) > 1:
-            pen = QPen(QColor(102, 204, 255, 200), 2)
+            pen = QPen(QColor(102, 204, 255, 255), 4)
             painter.setPen(pen)
             for i in range(len(self.strokes) - 1):
                 painter.drawLine(self.strokes[i], self.strokes[i + 1])
