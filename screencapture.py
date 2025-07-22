@@ -5,19 +5,23 @@ from PIL import ImageGrab
 from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QInputDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit
 from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont, QLinearGradient, QPainterPath, QTextCursor
 from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, QSize, QBuffer, QIODevice, QPointF, QRectF, pyqtSignal
+from PIL import Image, ImageFilter
 import litellm # Import litellm
 import markdown # Import markdown library
 import base64 # For base64 encoding images
 import io # For in-memory image handling (still useful for general byte operations, but QBuffer for QImage.save)
 
-MODES = ['freestyle', 'rect', 'arrow', 'text']
+MODES = ['freestyle', 'rect', 'arrow', 'text', 'blur', 'highlight', 'erase']
 
 # unicode icons for modes
 MODE_ICONS = {
     'freestyle': '✏️',
-    'rect': '⬜',
-    'arrow': '➡️',
-    'text': '📝'
+    'rect': '▭',
+    'arrow': '➔',
+    'text': '📝',
+    'blur': '🌀',
+    'highlight': '🔶',
+    'erase': '🧽',
 }
 
 class ScreenshotAnnotator(QWidget):
@@ -184,7 +188,6 @@ class ScreenshotAnnotator(QWidget):
             chat_x = self.selection_rect.right() - chat_width - 40
             chat_height -= 10
             
-
         input_x = chat_x
         input_y = chat_y + chat_height + 5 # Below chat display, with a small gap
         input_width = chat_width - 80
@@ -272,7 +275,6 @@ class ScreenshotAnnotator(QWidget):
 
     def annotation_mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # Translate event to selection_rect-local coordinates
             pt = event.position().toPoint() - self.selection_rect.topLeft()
             self.ann_drawing = True
             self.ann_start_point = pt
@@ -280,15 +282,19 @@ class ScreenshotAnnotator(QWidget):
 
             if self.mode == 'freestyle':
                 self.ann_temp_path = [self.ann_start_point]
+            elif self.mode == 'highlight':
+                self.ann_temp_path = [self.ann_start_point]
+            elif self.mode == 'blur':
+                self.ann_temp_path = [self.ann_start_point]
+            elif self.mode == 'erase':
+                self.ann_temp_path = [self.ann_start_point]
             elif self.mode == 'text':
-                # Check if moving existing text
                 for pos, txt in reversed(self.text_items):
                     rect = QRect(pos, QSize(200, 30))
                     if rect.contains(self.ann_start_point):
                         self.selected_text = (pos, txt)
                         self.drag_offset = self.ann_start_point - pos
                         return
-                # New text input
                 self.ann_drawing = False
                 text, ok = QInputDialog.getText(self, "Enter Text", "Text:")
                 if ok and text:
@@ -307,9 +313,38 @@ class ScreenshotAnnotator(QWidget):
 
         if self.ann_drawing and self.mode != 'text':
             self.ann_end_point = pt
-            if self.mode == 'freestyle':
+            if self.mode in ['freestyle', 'highlight', 'erase']:
                 self.ann_temp_path.append(self.ann_end_point)
             self.update()
+
+            # Live preview for highlight and erase
+            if self.mode in ['highlight', 'erase']:
+                self.redraw_canvas()
+                painter = QPainter(self.annotation_canvas)
+                if self.mode == 'highlight':
+                    highlight_pen = QPen(QColor(255, 255, 0, 10), 32, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                    painter.setPen(highlight_pen)
+                    for i in range(1, len(self.ann_temp_path)):
+                        painter.drawLine(self.ann_temp_path[i - 1], self.ann_temp_path[i])
+                elif self.mode == 'erase':
+                    erase_pen = QPen(Qt.GlobalColor.transparent, 32, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+                    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+                    painter.setPen(erase_pen)
+                    for i in range(1, len(self.ann_temp_path)):
+                        painter.drawLine(self.ann_temp_path[i - 1], self.ann_temp_path[i])
+                    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+                painter.end()
+                self.update()
+            elif self.mode == 'blur':
+                # Draw a preview rectangle for blur
+                self.redraw_canvas()
+                painter = QPainter(self.annotation_canvas)
+                rect = QRect(self.ann_start_point, self.ann_end_point).normalized()
+                preview_pen = QPen(QColor(0, 0, 0, 128), 2, Qt.PenStyle.DashLine)
+                painter.setPen(preview_pen)
+                painter.drawRect(rect)
+                painter.end()
+                self.update()
 
     def annotation_mouseReleaseEvent(self, event):
         if self.selected_text:
@@ -329,7 +364,19 @@ class ScreenshotAnnotator(QWidget):
             elif self.mode == 'freestyle':
                 for i in range(1, len(self.ann_temp_path)):
                     painter.drawLine(self.ann_temp_path[i - 1], self.ann_temp_path[i])
-
+            elif self.mode == 'blur':
+                # Apply blur to the selected rectangle
+                rect = QRect(self.ann_start_point, self.ann_end_point).normalized()
+                if rect.width() > 0 and rect.height() > 0:
+                    base_qimg = self.annotation_base.copy(rect).toImage()
+                    ptr = base_qimg.bits()
+                    ptr.setsize(base_qimg.sizeInBytes())
+                    pil_img = Image.frombytes("RGBA", (base_qimg.width(), base_qimg.height()), bytes(ptr))
+                    blurred = pil_img.filter(ImageFilter.GaussianBlur(radius=6))
+                    buf = blurred.tobytes("raw", "RGBA")
+                    qimg_blur = QImage(buf, blurred.width, blurred.height, QImage.Format.Format_RGBA8888)
+                    painter.drawImage(rect.topLeft(), qimg_blur)
+            # No special action for highlight or erase on mouse release (already handled in live preview)
             painter.end()
             self.ann_actions.append(self.annotation_canvas.copy())
             self.update()
@@ -561,7 +608,7 @@ class ScreenshotAnnotator(QWidget):
         try:
             full_response_content = ""
             # First, emit a signal to indicate that the LLM is starting to respond
-            self.llm_chunk_received.emit("<i>LLM:</i> ")
+            self.llm_chunk_received.emit("<b><i>Sherlock: </i></b>")
 
             for chunk in litellm.completion(
                 model="gemini/gemini-1.5-flash",
@@ -576,7 +623,7 @@ class ScreenshotAnnotator(QWidget):
             self.llm_stream_finished.emit(full_response_content)
 
         except Exception as e:
-            self.llm_chunk_received.emit(f"<i>LLM Error:</i> {e}")
+            self.llm_chunk_received.emit(f"<i>Error:</i> {e}")
 
     def append_chat_chunk(self, chunk):
         html_chunk = markdown.markdown(chunk).strip()
