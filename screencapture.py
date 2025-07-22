@@ -3,7 +3,13 @@ import math
 from PIL import ImageGrab
 from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QInputDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit
 from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont
+import math
+from PIL import ImageGrab
+from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QInputDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit
+from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont
 from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, QSize
+import litellm # Import litellm
+import markdown # Import markdown library
 
 MODES = ['freestyle', 'rect', 'arrow', 'text']
 
@@ -87,6 +93,7 @@ class ScreenshotAnnotator(QWidget):
         """)
         self.send_button.hide()
 
+        self.chat_history = [] # Initialize chat history
 
         self.showFullScreen()
 
@@ -414,13 +421,35 @@ class ScreenshotAnnotator(QWidget):
         user_message = self.message_input.text().strip()
         if user_message:
             self.chat_display.append(f"<b>You:</b> {user_message}")
+            self.chat_history.append({"role": "user", "content": user_message})
             self.message_input.clear()
-            QTimer.singleShot(500, lambda: self.get_llm_response(user_message))
+            QTimer.singleShot(500, lambda: self.get_llm_response())
 
-    def get_llm_response(self, user_message):
-        # Placeholder for LLM integration
-        llm_response = f"<i>LLM:</i> I received your message: '{user_message}'. How can I assist you further?"
-        self.chat_display.append(llm_response)
+    def get_llm_response(self):
+        try:
+            self.chat_display.append("<i>LLM:</i> ") # Start LLM response with a prefix
+            full_response_content = ""
+            for chunk in litellm.completion(
+                model="gemini/gemini-1.5-flash",
+                messages=self.chat_history,
+                stream=True
+            ):
+                if chunk.choices[0].delta.content:
+                    full_response_content += chunk.choices[0].delta.content
+                    html_response = markdown.markdown(full_response_content)
+                    # Clear previous LLM response and append updated one
+                    # This is a bit hacky for streaming, a better way would be to use a custom QTextDocument
+                    # For simplicity, we'll replace the last block.
+                    cursor = self.chat_display.textCursor()
+                    cursor.movePosition(cursor.MoveOperation.End) # Corrected: Use QTextCursor.MoveOperation.End
+                    cursor.select(cursor.SelectionType.BlockUnderCursor) # Corrected: Use QTextCursor.SelectionType.BlockUnderCursor
+                    cursor.removeSelectedText()
+                    self.chat_display.append(f"<i>LLM:</i> {html_response}")
+                    QApplication.processEvents() # Process events to update UI immediately
+
+            self.chat_history.append({"role": "assistant", "content": full_response_content})
+        except Exception as e:
+            self.chat_display.append(f"<i>LLM Error:</i> {e}")
 
 
 if __name__ == "__main__":
