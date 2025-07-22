@@ -1,9 +1,10 @@
 import sys
 import math
+import threading
 from PIL import ImageGrab
 from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QInputDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit
-from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont, QTextCursor
-from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, QSize, QBuffer, QIODevice # Import QBuffer and QIODevice
+from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont, QLinearGradient, QPainterPath, QTextCursor
+from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, QSize, QBuffer, QIODevice, QPointF, QRectF, pyqtSignal
 import litellm # Import litellm
 import markdown # Import markdown library
 import base64 # For base64 encoding images
@@ -20,6 +21,9 @@ MODE_ICONS = {
 }
 
 class ScreenshotAnnotator(QWidget):
+    llm_chunk_received = pyqtSignal(str)
+    llm_stream_finished = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowFlags(
@@ -42,6 +46,15 @@ class ScreenshotAnnotator(QWidget):
         self.selection_rect = QRect()
         self.show_rect = False
         self.selection_confirmed = False
+
+        # --- Initial Full-Screen Animation State (now continuous wave) ---
+        self.gradient_phase = 0.0 # Phase for the wave animation
+        self.initial_animation_timer = QTimer(self) # Timer for the initial animation
+        self.initial_animation_timer.timeout.connect(self.update_initial_animation)
+        self.initial_animation_timer.setInterval(30) # Update every 30ms
+        self.initial_animation_timer.start() # Animation now starts immediately on launch
+
+        self.border_angle = 0.0 # New variable for border gradient rotation
 
         # Annotation state
         self.annotation_canvas = None
@@ -92,7 +105,18 @@ class ScreenshotAnnotator(QWidget):
         self.send_button.hide()
 
         self.chat_history = [] # Initialize chat history
+        self.llm_chunk_received.connect(self.append_chat_chunk)
+        self.llm_stream_finished.connect(self.finalize_llm_response)
         self.showFullScreen()
+
+    def update_initial_animation(self):
+        """
+        Updates the phase for the full-screen wave animation
+        and triggers a repaint.
+        """
+        self.gradient_phase = (self.gradient_phase + 0.05) % (2 * math.pi) # Increment phase, wrap around 2*PI
+        self.border_angle = (self.border_angle + 0.03) % (2 * math.pi) # Increment border angle for rotation
+        self.update() # Request a repaint
 
     # --- Selection Phase ---
     def mousePressEvent(self, event: QMouseEvent):
@@ -120,7 +144,6 @@ class ScreenshotAnnotator(QWidget):
             if event.button() == Qt.MouseButton.LeftButton and self.drawing:
                 self.drawing = False
                 self.computeBoundingRect()
-                # self.show_rect = True
                 self.update()
                 self.confirm_selection()
         else:
@@ -361,7 +384,6 @@ class ScreenshotAnnotator(QWidget):
             btn.setParent(None)
         self.annotation_buttons = []
         self.setCursor(Qt.CursorShape.CrossCursor)
-        self.show_rect = False
         self.selection_rect = QRect()
         self.chat_display.hide()
         self.message_input.hide()
@@ -402,62 +424,55 @@ class ScreenshotAnnotator(QWidget):
 
     # --- Paint ---
     def paintEvent(self, event):
+        """
+        Handles the painting of the widget, including background, selection,
+        annotations, and the LLM thinking animation.
+        """
         painter = QPainter(self)
 
-        # Dark overlay
-        overlay = QPixmap(self.bg_pixmap.size())
-        overlay.fill(Qt.GlobalColor.transparent)
-        p = QPainter(overlay)
-        p.fillRect(overlay.rect(), QColor(0, 0, 0, 128))  # 50% opacity
-        p.end()
-
+        # 1. Draw the original full screenshot
         painter.drawPixmap(0, 0, self.bg_pixmap)
-        painter.drawPixmap(0, 0, overlay)
 
-        # Reveal selection rect
-        if self.show_rect and self.selection_rect.isValid():
+        # 2. Draw the animated gradient over the entire screen (always active)
+        # Using fixed RGB values for red and blue for the background gradient
+        color1_bg = QColor(255, 0, 0, 100) # Red with 100 alpha
+        color2_bg = QColor(0, 0, 255, 100) # Blue with 100 alpha
+
+        gradient_full_screen = QLinearGradient(0, 0, self.width(), self.height())
+        gradient_full_screen.setColorAt(0.0, color1_bg)
+        gradient_full_screen.setColorAt(1.0, color2_bg)
+        painter.fillRect(self.rect(), gradient_full_screen)
+
+
+        # 3. Draw the dark overlay over the entire screen (on top of the background gradient)
+        overlay_color = QColor(0, 0, 0, 128) # 50% opaque black
+        painter.fillRect(self.rect(), overlay_color)
+
+        # 4. If selection is confirmed, reveal the selected area and draw specific gradients/elements
+        if self.selection_confirmed and self.selection_rect.isValid():
+            # A. Reveal the selected area by drawing the original content there (drawn LAST to cover gradients)
             cropped = self.bg_pixmap.copy(self.selection_rect)
             painter.drawPixmap(self.selection_rect.topLeft(), cropped)
-            # Draw border around selection rect
-            border_pen = QPen(QColor(255, 255, 255, 255), 3)
-            painter.setPen(border_pen)
-            painter.drawRect(self.selection_rect)
 
-        # Draw stroke path (selection phase)
-        if self.drawing and len(self.strokes) > 1:
-            pen = QPen(QColor(102, 204, 255, 255), 4)
-            painter.setPen(pen)
-            for i in range(len(self.strokes) - 1):
-                painter.drawLine(self.strokes[i], self.strokes[i + 1])
-
-        # Draw annotation (annotation phase)
-        if self.selection_confirmed and self.selection_rect.isValid():
-            # Draw annotation base and canvas
-            painter.drawPixmap(self.selection_rect.topLeft(), self.annotation_base)
+            # C. Draw annotations on top of the revealed screenshot
             painter.drawPixmap(self.selection_rect.topLeft(), self.annotation_canvas)
 
-            # Draw current drawing
+            # D. Draw the current temporary annotation being drawn
             painter.setPen(self.pen)
             if self.ann_drawing and self.mode != 'text':
+                painter.save()
+                painter.translate(self.selection_rect.topLeft())
                 if self.mode == 'rect':
                     rect = QRect(self.ann_start_point, self.ann_end_point).normalized()
-                    painter.save()
-                    painter.translate(self.selection_rect.topLeft())
                     painter.drawRect(rect)
-                    painter.restore()
                 elif self.mode == 'freestyle':
-                    painter.save()
-                    painter.translate(self.selection_rect.topLeft())
                     for i in range(1, len(self.ann_temp_path)):
                         painter.drawLine(self.ann_temp_path[i - 1], self.ann_temp_path[i])
-                    painter.restore()
                 elif self.mode == 'arrow':
-                    painter.save()
-                    painter.translate(self.selection_rect.topLeft())
                     self.draw_arrow(painter, self.ann_start_point, self.ann_end_point)
-                    painter.restore()
+                painter.restore()
 
-            # Draw text
+            # E. Draw all text annotations
             painter.setPen(self.pen)
             painter.setFont(QFont("Sans", 16))
             painter.save()
@@ -466,9 +481,48 @@ class ScreenshotAnnotator(QWidget):
                 painter.drawText(pos, text)
             painter.restore()
 
-            # Draw border
-            painter.setPen(QPen(self.border_color, 4))
-            painter.drawRect(self.selection_rect.adjusted(1, 1, -2, -2))
+            # Add a red-grey-blue gradient border around the selected area
+            # Calculate center of the selection rectangle
+            center_x = self.selection_rect.center().x()
+            center_y = self.selection_rect.center().y()
+
+            # Determine a length for the gradient line that spans across the rectangle
+            # It should be large enough to cover the diagonal
+            gradient_line_length = math.sqrt(self.selection_rect.width()**2 + self.selection_rect.height()**2)
+
+            # Calculate start and end points for the linear gradient based on the rotating angle
+            # These points are relative to the center of the selection_rect
+            start_x_rel = -gradient_line_length / 2 * math.cos(self.border_angle)
+            start_y_rel = -gradient_line_length / 2 * math.sin(self.border_angle)
+            end_x_rel = gradient_line_length / 2 * math.cos(self.border_angle)
+            end_y_rel = gradient_line_length / 2 * math.sin(self.border_angle)
+
+            # Convert relative points to absolute screen coordinates
+            gradient_start_point = QPointF(center_x + start_x_rel, center_y + start_y_rel)
+            gradient_end_point = QPointF(center_x + end_x_rel, center_y + end_y_rel)
+            
+            border_gradient = QLinearGradient(gradient_start_point, gradient_end_point)
+            
+            # Setting color stops for 3:7 red to (grey to blue) ratio
+            border_gradient.setColorAt(0.0, QColor(255, 0, 0)) # Red starts
+            border_gradient.setColorAt(0.3, QColor(255, 0, 0)) # Red ends at 30%
+            border_gradient.setColorAt(0.3, QColor(128, 128, 128)) # Grey starts at 30%
+            border_gradient.setColorAt(1.0, QColor(0, 0, 255)) # Blue ends at 100%
+
+            gradient_pen = QPen(border_gradient, 2) # 2 pixels thick
+            painter.setPen(gradient_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush) # No fill for the border
+            
+            # Add rounded edges to the border
+            border_radius = 10 # Define a radius for rounded corners
+            painter.drawRoundedRect(QRectF(self.selection_rect), border_radius, border_radius)
+
+        # 4. If selection is NOT confirmed, draw the selection stroke
+        elif self.drawing and len(self.strokes) > 1:
+            pen = QPen(QColor(102, 204, 255, 200), 2)
+            painter.setPen(pen)
+            for i in range(len(self.strokes) - 1):
+                painter.drawLine(self.strokes[i], self.strokes[i + 1])
 
     def send_message(self):
         user_message = self.message_input.text().strip()
@@ -476,6 +530,7 @@ class ScreenshotAnnotator(QWidget):
             return
 
         self.chat_display.append(f"<b>You:</b> {user_message}")
+        self.chat_display.append("")
         self.message_input.clear()
 
         # Prepare message content, including image if available
@@ -493,24 +548,21 @@ class ScreenshotAnnotator(QWidget):
                 })
 
         if message_content:
-            # If this is the first message or if the last message was from assistant, add a new user role
-            # Otherwise, append to the last user message (if it was multimodal)
             if not self.chat_history or self.chat_history[-1]["role"] == "assistant":
                 self.chat_history.append({"role": "user", "content": message_content})
-            else: # Append to existing user message
-                # This part needs careful handling for existing multimodal messages
-                # For simplicity, we'll just append new content to the last user message's content list
-                # A more robust solution might involve merging content or creating new messages
+            else:
                 self.chat_history[-1]["content"].extend(message_content)
 
-            QTimer.singleShot(500, lambda: self.get_llm_response())
+            # Run LLM call in a separate thread
+            thread = threading.Thread(target=self.get_llm_response)
+            thread.start()
 
     def get_llm_response(self):
         try:
-            self.chat_display.append("<i>LLM:</i> ")
-            QApplication.processEvents()
-
             full_response_content = ""
+            # First, emit a signal to indicate that the LLM is starting to respond
+            self.llm_chunk_received.emit("<i>LLM:</i> ")
+
             for chunk in litellm.completion(
                 model="gemini/gemini-1.5-flash",
                 messages=self.chat_history,
@@ -518,14 +570,27 @@ class ScreenshotAnnotator(QWidget):
             ):
                 if chunk.choices[0].delta.content:
                     content_chunk = chunk.choices[0].delta.content
+                    self.llm_chunk_received.emit(content_chunk)
                     full_response_content += content_chunk
-                    self.chat_display.insertPlainText(content_chunk)
-                    self.chat_display.ensureCursorVisible()
-                    QApplication.processEvents()
+            
+            self.llm_stream_finished.emit(full_response_content)
 
-            self.chat_history.append({"role": "assistant", "content": full_response_content})
         except Exception as e:
-            self.chat_display.append(f"<i>LLM Error:</i> {e}")
+            self.llm_chunk_received.emit(f"<i>LLM Error:</i> {e}")
+
+    def append_chat_chunk(self, chunk):
+        html_chunk = markdown.markdown(chunk).strip()
+        # Remove paragraph tags for smoother streaming
+        if html_chunk.startswith("<p>") and html_chunk.endswith("</p>"):
+            html_chunk = html_chunk[3:-4]
+            
+        self.chat_display.insertHtml(html_chunk)
+        self.chat_display.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def finalize_llm_response(self, full_response):
+        self.chat_history.append({"role": "assistant", "content": full_response})
+        self.chat_display.append("") # Add a newline for separation
 
 
 if __name__ == "__main__":
