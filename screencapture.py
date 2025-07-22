@@ -626,7 +626,7 @@ class ScreenshotAnnotator(QWidget):
             self.llm_chunk_received.emit(f"<i>Error:</i> {e}")
 
     def append_chat_chunk(self, chunk):
-        html_chunk = markdown.markdown(chunk).strip()
+        html_chunk = markdown.markdown(chunk,extensions=['extra']).strip()
         # Remove paragraph tags for smoother streaming
         if html_chunk.startswith("<p>") and html_chunk.endswith("</p>"):
             html_chunk = html_chunk[3:-4]
