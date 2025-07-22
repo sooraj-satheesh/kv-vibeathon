@@ -2,14 +2,12 @@ import sys
 import math
 from PIL import ImageGrab
 from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QInputDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit
-from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont
-import math
-from PIL import ImageGrab
-from PyQt6.QtWidgets import QApplication, QWidget, QPushButton, QInputDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit
-from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont
-from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, QSize
+from PyQt6.QtGui import QPainter, QPixmap, QPen, QColor, QMouseEvent, QImage, QFont, QTextCursor
+from PyQt6.QtCore import Qt, QPoint, QRect, QTimer, QSize, QBuffer, QIODevice # Import QBuffer and QIODevice
 import litellm # Import litellm
 import markdown # Import markdown library
+import base64 # For base64 encoding images
+import io # For in-memory image handling (still useful for general byte operations, but QBuffer for QImage.save)
 
 MODES = ['freestyle', 'rect', 'arrow', 'text']
 
@@ -347,6 +345,38 @@ class ScreenshotAnnotator(QWidget):
         self.send_button.hide()
         self.update()
 
+    def get_current_annotated_image_base64(self):
+        if not self.selection_confirmed or not self.selection_rect.isValid():
+            return None
+
+        # Create a QImage to draw the current annotated state
+        combined_image = QImage(self.selection_rect.size(), QImage.Format.Format_RGBA8888)
+        combined_image.fill(Qt.GlobalColor.transparent) # Start with transparent background
+
+        painter = QPainter(combined_image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Draw the base image
+        painter.drawPixmap(0, 0, self.annotation_base)
+
+        # Draw the annotation canvas
+        painter.drawPixmap(0, 0, self.annotation_canvas)
+
+        # Draw text items
+        painter.setPen(self.pen)
+        painter.setFont(QFont("Sans", 16))
+        for pos, text in self.text_items:
+            painter.drawText(pos, text)
+        painter.end()
+
+        # Convert QImage to bytes using QBuffer and then to base64
+        byte_array = QBuffer()
+        byte_array.open(QIODevice.OpenModeFlag.WriteOnly)
+        combined_image.save(byte_array, "PNG") # Save as PNG to maintain transparency
+        encoded_image = base64.b64encode(byte_array.data()).decode("utf-8")
+        byte_array.close()
+        return encoded_image
+
     # --- Paint ---
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -419,15 +449,44 @@ class ScreenshotAnnotator(QWidget):
 
     def send_message(self):
         user_message = self.message_input.text().strip()
+        if not user_message and not self.selection_confirmed: # Don't send empty message if no selection
+            return
+
+        self.chat_display.append(f"<b>You:</b> {user_message}")
+        self.message_input.clear()
+
+        # Prepare message content, including image if available
+        message_content = []
         if user_message:
-            self.chat_display.append(f"<b>You:</b> {user_message}")
-            self.chat_history.append({"role": "user", "content": user_message})
-            self.message_input.clear()
+            message_content.append({"type": "text", "text": user_message})
+
+        # Get current annotated image and add to message if selection is confirmed
+        if self.selection_confirmed:
+            encoded_image = self.get_current_annotated_image_base64()
+            if encoded_image:
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{encoded_image}"}
+                })
+
+        if message_content:
+            # If this is the first message or if the last message was from assistant, add a new user role
+            # Otherwise, append to the last user message (if it was multimodal)
+            if not self.chat_history or self.chat_history[-1]["role"] == "assistant":
+                self.chat_history.append({"role": "user", "content": message_content})
+            else: # Append to existing user message
+                # This part needs careful handling for existing multimodal messages
+                # For simplicity, we'll just append new content to the last user message's content list
+                # A more robust solution might involve merging content or creating new messages
+                self.chat_history[-1]["content"].extend(message_content)
+
             QTimer.singleShot(500, lambda: self.get_llm_response())
 
     def get_llm_response(self):
         try:
-            self.chat_display.append("<i>LLM:</i> ") # Start LLM response with a prefix
+            self.chat_display.append("<i>LLM:</i> ")
+            QApplication.processEvents()
+
             full_response_content = ""
             for chunk in litellm.completion(
                 model="gemini/gemini-1.5-flash",
@@ -435,17 +494,11 @@ class ScreenshotAnnotator(QWidget):
                 stream=True
             ):
                 if chunk.choices[0].delta.content:
-                    full_response_content += chunk.choices[0].delta.content
-                    html_response = markdown.markdown(full_response_content)
-                    # Clear previous LLM response and append updated one
-                    # This is a bit hacky for streaming, a better way would be to use a custom QTextDocument
-                    # For simplicity, we'll replace the last block.
-                    cursor = self.chat_display.textCursor()
-                    cursor.movePosition(cursor.MoveOperation.End) # Corrected: Use QTextCursor.MoveOperation.End
-                    cursor.select(cursor.SelectionType.BlockUnderCursor) # Corrected: Use QTextCursor.SelectionType.BlockUnderCursor
-                    cursor.removeSelectedText()
-                    self.chat_display.append(f"<i>LLM:</i> {html_response}")
-                    QApplication.processEvents() # Process events to update UI immediately
+                    content_chunk = chunk.choices[0].delta.content
+                    full_response_content += content_chunk
+                    self.chat_display.insertPlainText(content_chunk)
+                    self.chat_display.ensureCursorVisible()
+                    QApplication.processEvents()
 
             self.chat_history.append({"role": "assistant", "content": full_response_content})
         except Exception as e:
